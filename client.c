@@ -1041,9 +1041,9 @@ _malformed:
 	/* request_lines[0] is request method. Parse it now. */
 	s = t = rh_strdup(clstate->request_lines[0]);
 
+	clstate->protoversion = rh_strdup("0.9");
 	d = strchr(s, ' ');
 	if (!d) {
-		clstate->protoversion = rh_strdup("0.9");
 		response_error(clstate, 400); /* nonsense from client */
 		goto _done;
 	}
@@ -1067,6 +1067,7 @@ _malformed:
 	/* parse protoversion */
 	d = strstr(s, "HTTP/");
 	if (!d) {
+		pfree(clstate->protoversion);
 		clstate->protoversion = rh_strdup("0.9"); /* simply "GET /path", this is 0.9. */
 		/* Only GET in HTTP/0.9! */
 		if (clstate->method != REQ_METHOD_GET) {
@@ -1084,6 +1085,7 @@ _malformed:
 		if (!strcmp(d, "0.9")
 		|| !strcmp(d, "1.0")
 		|| !strcmp(d, "1.1")) {
+			pfree(clstate->protoversion);
 			clstate->protoversion = rh_strdup(d); /* for response */
 		}
 		else { /* you have bad request */
@@ -1110,6 +1112,35 @@ _malformed:
 
 	/* done with temporary. */
 	pfree(s);
+
+	/* detect multiple headers. Their handling is not implemented now, so throw an error. */
+	if (clstate->tail && clstate->sztail > 0) {
+		s = (char *)clstate->tail;
+		size_t sz = clstate->sztail;
+
+		d = rh_memmem(s, sz, "\r\n", CSTR_SZ("\r\n"));
+		if (!d) d = s;
+		if ((!memcmp(s, "GET ", CSTR_SZ("GET "))
+		|| !memcmp(s, "HEAD ", CSTR_SZ("HEAD "))
+		|| !memcmp(s, "POST ", CSTR_SZ("POST ")))
+		&& rh_memmem(s, d-s, "HTTP/", CSTR_SZ("HTTP/"))
+		&& rh_memmem(s, sz, "\r\n\r\n", 4)) {
+			response_error(clstate, 400);
+			goto _done;
+		}
+
+		/* same for Unix-ish request */
+		d = rh_memmem(clstate->tail, clstate->sztail, "\n", CSTR_SZ("\n"));
+		if (!d) d = s;
+		if ((!memcmp(s, "GET ", CSTR_SZ("GET "))
+		|| !memcmp(s, "HEAD ", CSTR_SZ("HEAD "))
+		|| !memcmp(s, "POST ", CSTR_SZ("POST ")))
+		&& rh_memmem(s, d-s, "HTTP/", CSTR_SZ("HTTP/"))
+		&& rh_memmem(s, sz, "\n\n", 4)) {
+			response_error(clstate, 400);
+			goto _done;
+		}
+	}
 
 	/* client may pass some parameters. Split the path into two if there's any. */
 	s = rh_strdup(clstate->request);
